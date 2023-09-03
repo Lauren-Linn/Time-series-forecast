@@ -1,0 +1,331 @@
+---
+title: "ECON8015 Assignment 1"
+author: "Hsin-Wen Lin"
+date: "2023-08-22"
+output:
+  html_document:
+    df_print: paged
+abstract: This forecasting report will include three cases, which are the "Median Price of Established House Transfers in Sydney", "COVID-19 cases admitted to Australian hospitals", and "Industrial Production Index". This report aims to forecast the next four quarters for house prices, the next four weeks for 'COVID-19' hospitalizations, and the next twelve months for industrial production.
+---
+
+<br>
+
+## **Introduction** ##
+
+First, I will read these three data and create their ts object that hold the dated data.
+```{r message=FALSE}
+# The first case: Median Price of Established House Transfers
+library(readabs)
+house_price <- read_abs(series_id = "A83728545T")
+ts_house <- ts(house_price$value, start=c(2002,3), frequency = 4)
+
+# The second case: COVID-19 cases admitted to Australian hospitals
+library(xts)
+covid <- read.csv("https://www.econ2041.duckdns.org/ECON8015/covid_hospitalisations.csv", header=TRUE)
+ts_covid <- xts(covid$Hospitalisations, order.by = as.Date(covid$Date, format = "%Y/%m/%d"))
+
+# The third case: Industrial Production
+library(fredr)
+fredr_set_key("a60c274598ab2290d1540683145814b7")
+industrial_production <- fredr(series_id = "IPB50001N")
+ts_industrial <- ts(industrial_production$value, start = c(1919,1), frequency=12)
+```
+Now, I will forecast three cases in the following three sections, which follow the processes: Identification, Estimation, Model Checking, Forecast, and Conclusion.
+
+
+<br>
+
+## **Median Price of Established House Transfers**  ##
+
+Firstly, I am going to forecast the median price of established house transfers in Sydney in the next four quarters.
+
+#### **Identification**
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Plot the raw and logged data
+library(dygraphs)
+library(htmltools)
+
+# Create a list of dygraphs
+dy_price <- list(
+  dygraphs::dygraph(ts_house, main="Figure 1: House price over time (Raw data)", ylab="Price ($'000)"),
+  dygraphs::dygraph(log(ts_house), main="Figure 2: House price over time (Logged data)", ylab="log(Price)")
+)
+
+# Render the dygraphs objects using htmltools
+htmltools::browsable(htmltools::tagList(dy_price))
+```
+
+
+
+```{r echo=TRUE, fig.width=10, message=FALSE, warning=FALSE}
+# Plot the differenced data 
+par(mfrow = c(1,2))
+plot(diff(ts_house), main = "Figure 3: Differenced house price", ylab="diff(Price)")
+plot(diff(log(ts_house)), main = "Figure 4: Differenced logged house price", ylab="diff(log(Price))")
+```
+
+We can see that variance shows an increasing trend in Figure 1, so I will take the logarithm with house price in the next step, enabling it to remain constant over time, as shown in Figure 2. Since the data is non-stationary, I will fit the model with the differenced logged data. In addition, although the raw data does not show obvious repeating patterns, I will verify it with the ACF later.
+
+
+#### **Estimation**
+```{r echo=TRUE, fig.width=10, message=FALSE, warning=FALSE}
+# Plot the ACF and PACF of the differenced logged data
+library(forecast)
+par(mfrow = c(1,2))
+
+# Take 5 years lags
+Acf(diff(log(ts_house)), lag.max = 20, main = "Figure 5: ACF of Differenced Logged Data")  
+Pacf(diff(log(ts_house)), lag.max = 20, main = "Figure 6: PACF of Differenced Logged Data")
+```
+
+It can be seen from Figure 5 that the ACF does not show any apparent repeating spike, which seems to be non-seasonal. Since the correlation in Figure 5 decreases gradually, I will try q=0. Figure 6 also shows two significant spikes at the first two lags. As a result, I will estimate the order of the ARIMA(p,d,q) model with (2,1,0) and verify it with the Ljung-Box Q-test.
+
+#### **Model Checking**
+```{r message=FALSE, results="asis"}
+# Estimate ARIMA(2,1,0)
+out_house <- Arima(log(ts_house), order = c(2,1,0), include.constant = TRUE, method = "ML")
+
+# Summarize the output of ARIMA(2,1,0) model
+library(texreg)
+htmlreg(out_house, custom.model.names="ARIMA(2,1,0)",
+        caption.above = TRUE, custom.note = "",
+        caption="Table 1: ARIMA(2,1,0) Estimation Output")
+
+# Do Ljung-Box test
+Box.test(out_house$residuals, lag = 12, type = "Ljung-Box", fitdf = 2)
+```
+
+According to Table 1, the equation of the ARIMA(2,1,0) model: 
+
+$$ (1-\phi_1L-\phi_2L^2)\delta(x_t-a-bt) = \epsilon_t  $$
+
+$$ 
+\begin{aligned}
+\delta x_t = b + \phi_1\delta x_{t-1} + \phi_2\delta x_{t-2} + \epsilon_t  \\
+=0.01 - 0.2\delta x_{t-1} + 0.39\delta x_{t-2} + \epsilon_t 
+\end{aligned}  
+$$
+
+
+
+It can also be seen from Table 1 that the AIC value of this model is -248.92. Based on the p-value of the Ljung-Box test (0.417), we would not reject the null hypothesis and conclude that under 1%, 5%, and 10% significance levels, the errors in this model are white noise. So, now I will forecast the next four quarters of the house price with this model.
+
+
+#### **Forecast**
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Forecast the house price
+fc_house <- forecast(out_house, h=4,level=c(90,95,99))
+fc_house$x <- ts_house
+fc_house$mean <- exp(fc_house$mean + out_house$sigma2/2)
+fc_house$upper <- exp(fc_house$upper + out_house$sigma2/2)
+fc_house$lower <- exp(fc_house$lower + out_house$sigma2/2)
+
+# Table of forecasts
+library(kableExtra)
+
+kable(fc_house, "html", caption="Table 2: Forecasts of the house price") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+# Visualize the result with include 3 years past data
+plot(fc_house, include = 12, main="Figure 7: Forecasts of the House Price", xlab="Year", ylab="Price($'000)")
+```
+
+It can be seen from Table 2 and Figure 7 that the expected house price for the next four quarters shows a fluctuation between 1210856 to 1243142. Table 2 also shows the confidence interval of the house price prediction with 1%, 5%, and 10% significance level, respectively.
+
+#### **Conclusion**
+
+Based on this prediction, the house price for the next four quarters will not change crucially. However, based on the domain knowledge, house prices might be impacted seasonally. Although I did not consider seasonality, there might be a weak seasonal effect within this dataset, leading to different forecasts.
+
+
+<br>
+
+## **COVID-19 cases admitted to Australian hospitals** ##
+
+Secondly, I am going to predict the next four weeks for COVID-19 hospitalizations in Australia.
+
+#### **Identification**
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Plot the raw and logged data
+# Create a list of dygraphs
+dy_covid <- list(
+  dygraphs::dygraph(ts_covid, main = "Figure 8: COVID-19 hospitalizations over time (Raw data)", ylab = "hospitalizations"),
+  dygraphs::dygraph(log(ts_covid), main = "Figure 9: COVID-19 hospitalizations over time (Logged data)", ylab = "log(hospitalizations)")
+)
+
+# Render the dygraphs using htmltools
+htmltools::browsable(htmltools::tagList(dy_covid))
+```
+
+The variance of COVID-19 hospitalizations decreases in Figure 8, so I will take a logarithm with the dependent variable. Although it can be seen in Figure 8 that the number of hospitalizations has two peaks, followed by a significant decrease, I will not conclude that it is seasonal data since it is a small dataset. Additionally, I decided not to take any order of differences to data because it is stationary enough. As a result, I will model the data with logarithm terms, excluding seasonal effects and differences.
+
+
+#### **Estimation**
+```{r echo=TRUE, fig.width=8, message=FALSE, warning=FALSE}
+# Plot the ACF and PACF of the logged data
+par(mfrow = c(1,2))
+
+# Take 15 weeks lags
+Acf(log(ts_covid), lag.max = 15, main = "Figure 10: ACF of Logged data ")  
+Pacf(log(ts_covid), lag.max = 15, main = "Figure 11: PACF of Logged data")
+```
+
+I will set q=1 because ACF shows a moderate decrease in Figure 10. In addition, in Figure 11, we can see several spikes from lag 1 to lag 4, where the first two are more significant. Thus, I will try the ARIMA(2,0,1) model and test it with the Ljung-Box test.
+
+
+#### **Model Checking**
+```{r message=FALSE, results="asis"}
+# Estimate ARIMA(2,0,1)
+out_covid <- Arima(log(ts_covid), order = c(2,0,1), include.constant = TRUE, method = "ML")
+
+# Summarize the output of ARIMA(2,0,1) model
+htmlreg(out_covid, custom.model.names="ARIMA(2,0,1)",
+        caption.above = TRUE, custom.note = "",
+        caption="Table 3: ARIMA(2,0,1) Estimation Output")
+
+# Do the Ljung-Box test
+Box.test(out_covid$residuals, lag = 10, type = "Ljung-Box", fitdf = 2)
+```
+
+According to Table 3, the equation of the ARIMA(2,0,1) model: 
+
+$$ (1-\phi_1L-\phi_2L^2)(x_t-a-bt) = (1+\theta(L)) \epsilon_t  $$
+
+$$ 
+\begin{aligned}
+(x_t-a-bt) = \phi_1x_{t-1} + \phi_2x_{t-2} + \theta_1 \epsilon_{t-1} + \epsilon_t  \\
+x_t = 7.54 + 1.7x_{t-1} - 0.79x_{t-2} + 0.07\epsilon_{t-1} + \epsilon_t
+\end{aligned}  
+$$
+
+and the AIC value of the ARIMA(2,0,1) model is -110.07. From the p-value of the Ljung-Box test(0.6), under 1%, 5%, and 10% significance levels, the model does not reject the null hypothesis and conclude that the residuals are white noise. Therefore, now I am going to predict the data based on the ARIMA(2,0,1) model.
+
+
+#### **Forecast**
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Forecast the house price
+fc_covid <- forecast(out_covid, h=4,level=c(90,95,99))
+fc_covid$x <- ts_covid
+fc_covid$mean <- exp(fc_covid$mean + out_covid$sigma2/2)
+fc_covid$upper <- exp(fc_covid$upper + out_covid$sigma2/2)
+fc_covid$lower <- exp(fc_covid$lower + out_covid$sigma2/2)
+
+# Table of forecasts
+kable(fc_covid, "html", caption="Table 4: Forecasts of the COVID-19 hospitalizations") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+# Visualize the result with 7 weeks past data
+plot(fc_covid, include = 7, main="Figure 12: Forecasts of the COVID-19 hospitalizations", 
+     xlab="Days from 2022-09-09", ylab="hospitalizations ")
+```
+
+We can see from Figure 12 and Table 4 that the forecast of COVID-19 hospitalizations in Australia will first decrease in the next two weeks, followed by an increase of over 1000 after August 2023. The expected hospitalizations are predicted to be approximately 997, 983, 1031, and 1130, with their 90%, 95%, and 99% confidence intervals shown in Table 4.
+
+
+#### **Conclusion**
+Overall, the prediction shows that the hospitalizations of COVID-19 will gradually grow in the next four weeks. Due to the small dataset, which the number of observations is less than a cycle of a year, I did not consider the seasonal effect even though the data visualization shows a repeating trend. As a result, the forecast, which includes seasonality, might be different.
+
+
+<br>
+
+## **Industrial Production** ##
+
+Lastly, I am going to forecast the industrial production index for the next 12 months.
+
+#### **Identification**
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Plot the raw and logged data
+# Create a list of dygraphs
+dy_industrial <- list(
+  dygraphs::dygraph(ts_industrial, main = "Figure 13: Industrial production over time (Raw data)", ylab="Index"),
+  dygraphs::dygraph(log(ts_industrial), main = "Figure 14: Industrial production over time (Logged data)", ylab="log(Index)")
+)
+
+# Render the dygraphs using htmltools
+htmltools::browsable(htmltools::tagList(dy_industrial))
+```
+
+```{r echo=TRUE, fig.width=12, message=FALSE, warning=FALSE}
+# Plot the differenced data
+par(mfrow = c(1,2))
+plot(diff(ts_industrial), main = "Figure 15: Differenced industrial production", ylab="diff(Index)")
+plot(diff(log(ts_industrial)), main = "Figure 16: Differenced logged industrial production", ylab="diff(log(Index))")
+```
+
+It can be seen from Figures 13 to 16 that the variance does not remain constant over time. Although taking a logarithm with the response variable also shows non constant variance within the whole period, I will avoid it by only focusing on the data from 1960. Also, since the index of industrial production is non-stationary, I will take the differences.
+
+
+#### **Estimation**
+```{r echo=TRUE, fig.width=10, message=FALSE, warning=FALSE}
+# Define new ts object of industrial production which started from 1960
+new_ts <- window(ts_industrial, start=c(1960,1))
+
+# Plot the ACF and PACF of the differenced logged data 
+par(mfrow = c(3,2))  
+Acf(diff(log(new_ts)), lag.max = 48, main="Figure 17: ACF of differenced log")
+Pacf(diff(log(new_ts)), lag.max = 48, main="Figure 18: PACF of differenced log")
+
+Acf(diff(log(new_ts), 12), lag.max = 48, main="Figure 19: ACF of seasonally differenced log")
+Pacf(diff(log(new_ts), 12), lag.max = 48, main="Figure 20: PACF of seasonally differenced log")
+
+Acf(diff(diff(log(new_ts)), 12), lag.max = 48, main="Figure 21: ACF of seasonally and nonseasonally differenced data")
+Pacf(diff(diff(log(new_ts)), 12), lag.max = 48, main="Figure 22: PACF of seasonally and nonseasonally differenced data")
+```
+
+Figure 17 shows significant spikes at lag 12, 24,36, and 48, indicating the data has a seasonal effect. Since ACF in Figure 19 has an integrated decrease, I decided to take seasonal and nonseasonal differences with the data. According to Figure 21, there is one significant spike at lag 1 and lag 12, so I will take Q and q equal to 1. Figure 22 shows one spike at lag 1 and two significant spikes at lag 12 and 24. Hence, in the next step, I will try the ARIMA(1,1,1)(2,1,1) model and test it with the Ljung-Box test.
+
+
+
+#### **Model Checking**
+```{r message=FALSE, results="asis"}
+# Estimate ARIMA(2,0,1)
+out_industrial <- Arima(log(new_ts), order = c(1,1,1), seasonal = list(order=c(2,1,1), period = 12), include.constant = TRUE)
+
+# Summarize the output of ARIMA(2,0,1) model
+htmlreg(out_industrial, custom.model.names="ARIMA(1,1,1)(2,1,1)",
+        caption.above = TRUE, custom.note = "",
+        caption="Table 5: ARIMA(1,1,1)(2,1,1) Estimation Output")
+
+# Do the Ljung-Box test
+Box.test(out_industrial$residuals, lag = 36, type = "Ljung-Box", fitdf = 5)
+```
+
+According to Table 5, the equation of the ARIMA(1,1,1)(2,1,1) model: 
+
+$$ (1-\phi_1L)(1-\Phi_1L^{12}-\Phi_2L^{24})x_t = (1+\theta_1L)(1+\Theta_1L^{12}) \epsilon_t  $$
+
+$$ 
+\begin{aligned}
+x_t = \phi_1x_{t-1} + \Phi_1x_{t-12} + \Phi_2x_{t-24} - \phi_1\Phi_1x_{t-13} - \phi_1\Phi_2x_{t-25} + \theta_1\epsilon_{t-1} + \Theta_1\epsilon_{t-12} + \theta_1\Theta_1\epsilon_{t-13} \\
+= -0.21_1x_{t-1} - 0.03x_{t-12} - 0.1x_{t-24} - (-0.21)(-0.03)x_{t-13} - (-0.21)(-0.1)x_{t-25} + 0.39\epsilon_{t-1} - 0.74\epsilon_{t-12} + 0.39(-0.74)\epsilon_{t-13}  \\
+= -0.21_1x_{t-1} - 0.03x_{t-12} - 0.1x_{t-24} - 0.0063x_{t-13} - 0.021x_{t-25} + 0.39\epsilon_{t-1} - 0.74\epsilon_{t-12} - 0.2886\epsilon_{t-13}
+\end{aligned}  
+$$
+
+and the AIC value is -4528.73. The p-value of the Ljung-Box test is 0.28, which means that under 1%, 5%, and 10% significance levels, the errors of the model are white noise. As a result, the ARIMA(1,1,1)(2,1,1) model is a good approximation of the index of industrial production.
+
+
+#### **Forecast**
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Forecast the house price
+fc_industrial <- forecast(out_industrial, h=12,level=c(90,95,99))
+fc_industrial$x <- new_ts
+fc_industrial$mean <- exp(fc_industrial$mean + out_industrial$sigma2/2)
+fc_industrial$upper <- exp(fc_industrial$upper + out_industrial$sigma2/2)
+fc_industrial$lower <- exp(fc_industrial$lower + out_industrial$sigma2/2)
+
+# Table of forecasts
+kable(fc_industrial, "html", caption="Table 6: Forecasts of the industrial production") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+# Visualize the result with 3 years past data
+plot(fc_industrial, include = 36, main="Figure 23: Forecasts of the industrial production", 
+     xlab="Year", ylab="Index ")
+```
+
+We can see from Table 6 and Figure 23 that the industrial production index is predicted to peak at 105 in the first month, followed by a fluctuation of around 103 until March 2024. There will be a significant decrease, below 100, in April 2024 and reach another peak at 104 in June.
+
+
+#### **Conclusion**
+Although the expected industrial production index within the next twelve months fluctuated between 99 and 106, the model is built by the data with 48 lags, which is the last four years. By taking more lags into account, the forecasts might have accordingly impact, which needs to be considered.
+
+
